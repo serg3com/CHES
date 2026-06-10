@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Шахматы</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#202020;color:white;font-family:Arial,sans-serif}
+header{height:60px;background:#111;display:flex;align-items:center;justify-content:space-between;padding:0 18px}
+h1{margin:0;font-size:28px}
+button{background:#444;color:white;border:1px solid #777;border-radius:10px;padding:10px 14px;font-size:16px;cursor:pointer}
+button:hover{background:#666}
+main{display:grid;grid-template-columns:1fr 320px;height:calc(100vh - 60px)}
+#wrap{display:flex;align-items:center;justify-content:center;padding:10px}
+#board{width:min(90vh,calc(100vw - 360px));height:min(90vh,calc(100vw - 360px));min-width:360px;min-height:360px;display:grid;grid-template-columns:repeat(8,1fr);border:4px solid #111}
+.sq{display:flex;align-items:center;justify-content:center;font-size:clamp(32px,7vmin,72px);user-select:none;position:relative}
+.light{background:#eeeed2}.dark{background:#769656}
+.sel{background:#f6f669!important}.last{background:#bacb44!important}.check{background:#d65050!important}
+.legal:after{content:"";width:22%;height:22%;background:rgba(0,0,0,.45);border-radius:50%;position:absolute}
+.piece{color:#111;text-shadow:0 1px white}
+#panel{background:#303030;padding:16px;overflow:auto}
+#status{color:#ffdd79;line-height:1.4}
+.row{margin:8px 0;line-height:1.6}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:5}
+.modal.show{display:flex}
+.box{background:#303030;border:2px solid #777;border-radius:18px;padding:24px;width:min(460px,94vw);display:grid;gap:12px;text-align:center}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.big{font-size:42px;display:block}
+@media(max-width:850px){main{grid-template-columns:1fr;height:auto}#board{width:96vw;height:96vw}#panel{min-height:260px}}
+</style>
+</head>
+<body>
+<header>
+<h1>Шахматы</h1>
+<button onclick="openMenu()">Меню</button>
+</header>
+
+<main>
+<div id="wrap"><div id="board"></div></div>
+<div id="panel">
+<h2>Статус</h2>
+<p id="status">Выбери режим игры.</p>
+<div class="row">Режим: <b id="modeText">—</b></div>
+<div class="row">Ход: <b id="turnText">Белые</b></div>
+<div class="row">ELO бота: <b id="eloText">800</b></div>
+<div class="grid">
+<button onclick="newGame(mode)">Новая игра</button>
+<button onclick="undo()">Отмена</button>
+<button onclick="setBotMode()">С ботом</button>
+<button onclick="setTwoMode()">2 игрока</button>
+</div>
+<br>
+<label>ELO бота:</label>
+<input id="eloInput" type="number" min="1" max="2900" value="800" style="width:100%;padding:10px;background:#181818;color:white;border:1px solid #777;border-radius:8px">
+<br><br>
+<button onclick="changeElo()">Поставить ELO</button>
+<h3>Ходы</h3>
+<ol id="moves"></ol>
+</div>
+</main>
+
+<div id="start" class="modal show">
+<div class="box">
+<h2>Шахматы</h2>
+<button onclick="setBotMode()">Играть с ботом</button>
+<button onclick="setTwoMode()">2 игрока на одном ПК</button>
+</div>
+</div>
+
+<div id="menu" class="modal">
+<div class="box">
+<h2>Меню</h2>
+<button onclick="closeMenu()">Продолжить</button>
+<button onclick="newGame(mode);closeMenu()">Новая игра</button>
+<button onclick="setBotMode();closeMenu()">Играть с ботом</button>
+<button onclick="setTwoMode();closeMenu()">2 игрока</button>
+</div>
+</div>
+
+<div id="promo" class="modal">
+<div class="box">
+<h2>Пешка дошла до края</h2>
+<p>Выбери фигуру. Пешка и король запрещены.</p>
+<div class="grid">
+<button onclick="promote('q')"><span class="big">♕</span>Ферзь</button>
+<button onclick="promote('r')"><span class="big">♖</span>Ладья</button>
+<button onclick="promote('b')"><span class="big">♗</span>Слон</button>
+<button onclick="promote('n')"><span class="big">♘</span>Конь</button>
+</div>
+</div>
+</div>
+
+<script>
+const boardEl=document.getElementById("board");
+const statusEl=document.getElementById("status");
+const modeText=document.getElementById("modeText");
+const turnText=document.getElementById("turnText");
+const eloText=document.getElementById("eloText");
+const movesEl=document.getElementById("moves");
+
+let mode="bot";
+let elo=800;
+let board=[];
+let turn="w";
+let selected=null;
+let legal=[];
+let last=null;
+let history=[];
+let pending=null;
+let gameOver=false;
+
+const pieces={
+ wK:"♔",wQ:"♕",wR:"♖",wB:"♗",wN:"♘",wP:"♙",
+ bK:"♚",bQ:"♛",bR:"♜",bB:"♝",bN:"♞",bP:"♟"
+};
+
+function openMenu(){document.getElementById("menu").classList.add("show")}
+function closeMenu(){document.getElementById("menu").classList.remove("show")}
+function hideStart(){document.getElementById("start").classList.remove("show")}
+function sqName(r,c){return "abcdefgh"[c]+(8-r)}
+function inb(r,c){return r>=0&&r<8&&c>=0&&c<8}
+function clone(b){return b.map(row=>row.slice())}
+function enemy(p,color){return p&&p[0]!==color}
+function own(p,color){return p&&p[0]===color}
+
+function setBotMode(){mode="bot";hideStart();newGame("bot")}
+function setTwoMode(){mode="two";hideStart();newGame("two")}
+function changeElo(){elo=Math.max(1,Math.min(2900,parseInt(document.getElementById("eloInput").value)||800));eloText.textContent=elo}
+
+function newGame(m){
+ mode=m||mode; changeElo();
+ board=[
+  ["bR","bN","bB","bQ","bK","bB","bN","bR"],
+  ["bP","bP","bP","bP","bP","bP","bP","bP"],
+  ["","","","","","","",""],
+  ["","","","","","","",""],
+  ["","","","","","","",""],
+  ["","","","","","","",""],
+  ["wP","wP","wP","wP","wP","wP","wP","wP"],
+  ["wR","wN","wB","wQ","wK","wB","wN","wR"]
+ ];
+ turn="w";selected=null;legal=[];last=null;history=[];pending=null;gameOver=false;
+ render();
+}
+
+function render(){
+ boardEl.innerHTML="";
+ let checkKing=isCheck(turn)?findKing(turn):null;
+ for(let r=0;r<8;r++){
+  for(let c=0;c<8;c++){
+   const d=document.createElement("div");
+   d.className="sq "+(((r+c)%2==0)?"light":"dark");
+   if(selected&&selected.r===r&&selected.c===c)d.classList.add("sel");
+   if(last&&((last.fr===r&&last.fc===c)||(last.tr===r&&last.tc===c)))d.classList.add("last");
+   if(checkKing&&checkKing.r===r&&checkKing.c===c)d.classList.add("check");
+   if(legal.some(m=>m.tr===r&&m.tc===c))d.classList.add("legal");
+   const p=board[r][c];
+   if(p){const s=document.createElement("span");s.className="piece";s.textContent=pieces[p];d.appendChild(s)}
+   d.onclick=()=>clickSq(r,c);
+   boardEl.appendChild(d);
+  }
+ }
+ modeText.textContent=mode==="bot"?"С ботом":"2 игрока";
+ turnText.textContent=turn==="w"?"Белые":"Чёрные";
+ eloText.textContent=elo;
+ movesEl.innerHTML="";
+ history.forEach((h,i)=>{let li=document.createElement("li");li.textContent=h.uci;movesEl.appendChild(li)});
+ if(gameOver)return;
+ statusEl.textContent=(isCheck(turn)?"Шах! ":"")+"Ходят "+(turn==="w"?"белые":"чёрные")+".";
+}
+
+function clickSq(r,c){
+ if(gameOver)return;
+ if(mode==="bot"&&turn==="b")return;
+ const p=board[r][c];
+ if(!selected){
+  if(p&&p[0]===turn){selected={r,c};legal=legalMoves(r,c,true);render()}
+  return;
+ }
+ if(p&&p[0]===turn){selected={r,c};legal=legalMoves(r,c,true);render();return}
+ const m=legal.find(x=>x.tr===r&&x.tc===c);
+ if(!m){selected=null;legal=[];render();return}
+ if(board[selected.r][selected.c][1]==="P"&&(r===0||r===7)){
+  pending=m;document.getElementById("promo").classList.add("show");return;
+ }
+ doMove(m);
+}
+
+function promote(kind){
+ if(!pending)return;
+ pending.promo=kind.toUpperCase();
+ document.getElementById("promo").classList.remove("show");
+ doMove(pending);pending=null;
+}
+
+function doMove(m){
+ const save=clone(board), oldTurn=turn;
+ let p=board[m.fr][m.fc];
+ board[m.fr][m.fc]="";
+ if(m.promo)p=p[0]+m.promo;
+ board[m.tr][m.tc]=p;
+ last=m;
+ history.push({board:save,turn:oldTurn,uci:sqName(m.fr,m.fc)+sqName(m.tr,m.tc)+(m.promo?m.promo.toLowerCase():"")});
+ turn=turn==="w"?"b":"w";
+ selected=null;legal=[];
+ if(allLegal(turn).length===0){
+  gameOver=true;
+  if(isCheck(turn))statusEl.textContent="Мат! Победили "+(turn==="w"?"чёрные":"белые")+".";
+  else statusEl.textContent="Пат! Ничья.";
+ }
+ render();
+ if(!gameOver&&mode==="bot"&&turn==="b")setTimeout(botMove,250);
+}
+
+function undo(){
+ if(history.length===0)return;
+ const h=history.pop();
+ board=h.board;turn=h.turn;selected=null;legal=[];last=null;gameOver=false;
+ if(mode==="bot"&&history.length>0&&turn==="b"){
+  const h2=history.pop();
+  board=h2.board;turn=h2.turn;
+ }
+ render();
+}
+
+function legalMoves(r,c,checkSafe){
+ const p=board[r][c]; if(!p)return[];
+ const color=p[0], type=p[1], moves=[];
+ const add=(tr,tc)=>{if(inb(tr,tc)&&!own(board[tr][tc],color))moves.push({fr:r,fc:c,tr,tc})};
+ if(type==="P"){
+  const dir=color==="w"?-1:1, start=color==="w"?6:1;
+  if(inb(r+dir,c)&&!board[r+dir][c])moves.push({fr:r,fc:c,tr:r+dir,tc:c});
+  if(r===start&&!board[r+dir][c]&&!board[r+2*dir][c])moves.push({fr:r,fc:c,tr:r+2*dir,tc:c});
+  for(const dc of [-1,1])if(inb(r+dir,c+dc)&&enemy(board[r+dir][c+dc],color))moves.push({fr:r,fc:c,tr:r+dir,tc:c+dc});
+ }
+ if(type==="N"){
+  [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]].forEach(d=>add(r+d[0],c+d[1]));
+ }
+ if(type==="B"||type==="R"||type==="Q"){
+  let dirs=[];
+  if(type==="B"||type==="Q")dirs.push([-1,-1],[-1,1],[1,-1],[1,1]);
+  if(type==="R"||type==="Q")dirs.push([-1,0],[1,0],[0,-1],[0,1]);
+  for(const d of dirs){
+   let tr=r+d[0],tc=c+d[1];
+   while(inb(tr,tc)){
+    if(!board[tr][tc])moves.push({fr:r,fc:c,tr,tc});
+    else{if(enemy(board[tr][tc],color))moves.push({fr:r,fc:c,tr,tc});break}
+    tr+=d[0];tc+=d[1];
+   }
+  }
+ }
+ if(type==="K"){
+  for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++)if(dr||dc)add(r+dr,c+dc);
+ }
+ if(!checkSafe)return moves;
+ return moves.filter(m=>{
+  const save=clone(board);
+  let pp=board[m.fr][m.fc];board[m.fr][m.fc]="";board[m.tr][m.tc]=pp;
+  const bad=isCheck(color);
+  board=save;
+  return !bad;
+ });
+}
+
+function allLegal(color){
+ let a=[];
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++)if(board[r][c]&&board[r][c][0]===color)a=a.concat(legalMoves(r,c,true));
+ return a;
+}
+
+function findKing(color){
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++)if(board[r][c]===color+"K")return{r,c};
+ return null;
+}
+
+function isCheck(color){
+ const k=findKing(color); if(!k)return false;
+ const other=color==="w"?"b":"w";
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+  if(board[r][c]&&board[r][c][0]===other){
+   const ms=legalMoves(r,c,false);
+   if(ms.some(m=>m.tr===k.r&&m.tc===k.c))return true;
+  }
+ }
+ return false;
+}
+
+function botMove(){
+ let moves=allLegal("b");
+ if(moves.length===0)return;
+ let move;
+ if(elo<400)move=moves[Math.floor(Math.random()*moves.length)];
+ else{
+  let scored=moves.map(m=>{
+   let score=0;
+   const target=board[m.tr][m.tc];
+   if(target)score+=value(target[1]);
+   if(Math.random()<Math.max(0.02,1-elo/1400))score+=Math.random()*400;
+   return{m,score};
+  });
+  scored.sort((a,b)=>b.score-a.score);
+  move=scored[0].m;
+ }
+ if(board[move.fr][move.fc][1]==="P"&&move.tr===7)move.promo="Q";
+ doMove(move);
+}
+
+function value(t){return{P:100,N:320,B:330,R:500,Q:900,K:20000}[t]||0}
+document.addEventListener("keydown",e=>{if(e.key==="Escape")openMenu()});
+newGame("bot");
+</script>
+</body>
+</html>
